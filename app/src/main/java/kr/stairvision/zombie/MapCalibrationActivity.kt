@@ -21,7 +21,7 @@ import android.widget.Toast
 import kr.stairvision.analysis.IntArraySource
 
 /**
- * 저장한 게임 화면 위에서 작업대를 눌러 지도에 등록한다.
+ * 저장한 게임 화면 위에서 작업대를 눌러 등록하고, 장애물(카운터·테이블·벽)을 끌어서 칠한다.
  * 여러 번 나눠 등록해도 된다: 캡처마다 그때의 카메라 위치가 함께 저장되므로 같은 지도에 이어 붙는다.
  */
 class MapCalibrationActivity : Activity() {
@@ -31,20 +31,22 @@ class MapCalibrationActivity : Activity() {
     private lateinit var info: TextView
     private var meta: MapStore.CaptureMeta? = null
     private var gray: GrayImage? = null
-    private var bitmap: Bitmap? = null
 
     private var tool: Tool = Tool.Seed
     private var seedFlower: String = Recipes.flowers.first()
-    private val added = mutableListOf<Mark>()
+    private val marks = mutableListOf<Mark>()
+    private val rects = mutableListOf<RectF>()
+    private val history = mutableListOf<Any>()
     private var charMark: Pair<Float, Float>? = null
 
     private sealed class Tool(val label: String) {
         data object Character : Tool("내 캐릭터")
         data object Seed : Tool("씨앗 상자")
+        data object Obstacle : Tool("장애물(끌기)")
         data class Other(val type: StationType) : Tool(type.label)
     }
 
-    /** 화면에 찍은 점. fx, fy는 캡처 이미지 비율 좌표. */
+    /** 화면에 찍은 작업대. fx, fy는 캡처 이미지 비율 좌표. */
     data class Mark(val type: StationType, val flower: String?, val fx: Float, val fy: Float)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,22 +62,24 @@ class MapCalibrationActivity : Activity() {
             })
             return
         }
-        bitmap = bmp
         val px = IntArray(bmp.width * bmp.height)
         bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-        gray = GrayImage.from(IntArraySource(px, bmp.width, bmp.height), meta!!.cell)
+        val g = GrayImage.from(IntArraySource(px, bmp.width, bmp.height), meta!!.cell)
+        gray = g
 
-        val existing = store.load()
         info = TextView(this).apply { textSize = 13f; setPadding(16, 6, 16, 6) }
         view = MapView(this, bmp).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
             onTap = { fx, fy -> onTap(fx, fy) }
-            existingCount = existing.stations.size
+            onRect = { r -> if (tool is Tool.Obstacle) addRect(r) }
+            dragMode = { tool is Tool.Obstacle }
         }
+        showExisting(g)
 
         val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val all = listOf(Tool.Character, Tool.Seed) +
-            listOf(StationType.POT, StationType.BRAZIER, StationType.BOOTH, StationType.WRAP, StationType.BAG).map { Tool.Other(it) }
+            listOf(StationType.POT, StationType.BRAZIER, StationType.BOOTH, StationType.WRAP, StationType.BAG).map { Tool.Other(it) } +
+            Tool.Obstacle
         all.forEach { t ->
             tools.addView(Button(this).apply {
                 text = t.label
@@ -103,6 +107,17 @@ class MapCalibrationActivity : Activity() {
         refresh()
     }
 
+    /** 이미 등록된 작업대·장애물을 이 화면 위치로 옮겨 회색으로 보여준다. */
+    private fun showExisting(g: GrayImage) {
+        val m = meta ?: return
+        val old = store.load()
+        view.oldMarks = old.stations.map { s -> Triple((s.x - m.camX) / g.w, (s.y - m.camY) / g.h, s.name) }
+        view.oldRects = old.obstacles.map { a ->
+            val n = a.normalized()
+            RectF((n.x0 - m.camX) / g.w, (n.y0 - m.camY) / g.h, (n.x1 - m.camX) / g.w, (n.y1 - m.camY) / g.h)
+        }
+    }
+
     private fun pickFlower() {
         AlertDialog.Builder(this)
             .setTitle("이 씨앗 상자의 꽃")
@@ -118,27 +133,45 @@ class MapCalibrationActivity : Activity() {
             is Tool.Seed -> "씨앗 상자($seedFlower)"
             else -> t.label
         }
-        info.text = "선택: $current · 이번에 찍은 곳 ${added.size}개" +
-            (if (charMark != null) " · 캐릭터 지정됨" else "") +
-            "\n작업대의 가운데를 누르세요. 씨앗 상자는 꽃마다 따로, 화분·포장대가 여러 개면 모두 등록하세요."
-        view.marks = added.map { Triple(it.fx, it.fy, label(it)) } +
+        val hint = if (tool is Tool.Obstacle) {
+            "캐릭터가 지나갈 수 없는 카운터·테이블·벽을 손가락으로 끌어 사각형으로 칠하세요. 통로는 비워 두세요."
+        } else {
+            "작업대의 가운데를 누르세요. 씨앗 상자는 꽃마다 따로, 화분·포장대가 여러 개면 모두 등록하세요."
+        }
+        info.text = "선택: $current · 작업대 ${marks.size} · 장애물 ${rects.size}" +
+            (if (charMark != null) " · 캐릭터 지정됨" else "") + "\n" + hint
+        view.marks = marks.map { Triple(it.fx, it.fy, if (it.type == StationType.SEED) "${it.flower}" else it.type.label) } +
             listOfNotNull(charMark?.let { Triple(it.first, it.second, "캐릭터") })
+        view.rects = rects.toList()
         view.invalidate()
     }
 
-    private fun label(m: Mark) = if (m.type == StationType.SEED) "${m.flower}" else m.type.label
-
     private fun onTap(fx: Float, fy: Float) {
         when (val t = tool) {
-            is Tool.Character -> charMark = fx to fy
-            is Tool.Seed -> added += Mark(StationType.SEED, seedFlower, fx, fy)
-            is Tool.Other -> added += Mark(t.type, null, fx, fy)
+            is Tool.Character -> {
+                charMark = fx to fy
+                history += "char"
+            }
+            is Tool.Seed -> Mark(StationType.SEED, seedFlower, fx, fy).also { marks += it; history += it }
+            is Tool.Other -> Mark(t.type, null, fx, fy).also { marks += it; history += it }
+            is Tool.Obstacle -> return
         }
         refresh()
     }
 
+    private fun addRect(r: RectF) {
+        if (r.width() < 0.01f || r.height() < 0.01f) return
+        rects += r
+        history += r
+        refresh()
+    }
+
     private fun undo() {
-        if (added.isNotEmpty()) added.removeAt(added.lastIndex) else charMark = null
+        when (val last = history.removeLastOrNull()) {
+            is Mark -> marks.remove(last)
+            is RectF -> rects.remove(last)
+            "char" -> charMark = null
+        }
         refresh()
     }
 
@@ -154,7 +187,7 @@ class MapCalibrationActivity : Activity() {
         val stations = old.stations.toMutableList()
         var nextId = (stations.maxOfOrNull { it.id } ?: 0) + 1
         var weak = 0
-        for (mk in added) {
+        for (mk in marks) {
             val cx = (mk.fx * g.w).toInt()
             val cy = (mk.fy * g.h).toInt()
             val st = Station(nextId++, mk.type, mk.flower, cx + m.camX, cy + m.camY)
@@ -162,19 +195,25 @@ class MapCalibrationActivity : Activity() {
             val patch = g.crop(cx, cy, MapStore.PATCH_HALF)
             if (patch != null && patch.std() >= 8f) patches[st.id] = patch else weak++
         }
+        val obstacles = old.obstacles + rects.map { r ->
+            Area(r.left * g.w + m.camX, r.top * g.h + m.camY, r.right * g.w + m.camX, r.bottom * g.h + m.camY)
+        }
         val (fx, fy) = charMark ?: (old.charFx to old.charFy)
-        store.save(stations, patches, fx, fy)
-        toast("작업대 ${added.size}곳을 저장했습니다 (전체 ${stations.size}곳)" + if (weak > 0) " · 화면 가장자리 $weak 곳은 위치 보정에 쓰지 않음" else "")
+        store.save(stations, patches, obstacles, fx, fy)
+        toast(
+            "작업대 ${marks.size}곳 · 장애물 ${rects.size}개 저장 (전체 작업대 ${stations.size} · 장애물 ${obstacles.size})" +
+                if (weak > 0) " · 화면 가장자리 $weak 곳은 위치 보정에 쓰지 않음" else "",
+        )
         finish()
     }
 
     private fun confirmClear() {
         AlertDialog.Builder(this)
-            .setMessage("등록한 지도를 모두 지울까요?")
+            .setMessage("등록한 지도(작업대·장애물)를 모두 지울까요?")
             .setPositiveButton("지우기") { _, _ ->
                 store.clear()
-                added.clear(); charMark = null
-                view.existingCount = 0
+                marks.clear(); rects.clear(); history.clear(); charMark = null
+                view.oldMarks = emptyList(); view.oldRects = emptyList()
                 refresh()
                 toast("지도를 지웠습니다")
             }
@@ -188,14 +227,29 @@ class MapCalibrationActivity : Activity() {
 @SuppressLint("ViewConstructor")
 class MapView(ctx: Context, private val bitmap: Bitmap) : View(ctx) {
     var marks: List<Triple<Float, Float, String>> = emptyList()
-    var existingCount = 0
+    var rects: List<RectF> = emptyList()
+    var oldMarks: List<Triple<Float, Float, String>> = emptyList()
+    var oldRects: List<RectF> = emptyList()
     var onTap: ((Float, Float) -> Unit)? = null
+    var onRect: ((RectF) -> Unit)? = null
+    var dragMode: () -> Boolean = { false }
+
     private val dst = RectF()
-    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 4f; color = Color.YELLOW
-    }
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 30f; color = Color.YELLOW; setShadowLayer(4f, 0f, 0f, Color.BLACK)
+    private var dragStart: Pair<Float, Float>? = null
+    private var dragNow: Pair<Float, Float>? = null
+
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 4f; color = Color.YELLOW }
+    private val oldRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = Color.LTGRAY }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 30f; color = Color.YELLOW; setShadowLayer(4f, 0f, 0f, Color.BLACK) }
+    private val oldText = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 24f; color = Color.LTGRAY; setShadowLayer(4f, 0f, 0f, Color.BLACK) }
+    private val block = Paint().apply { color = Color.argb(110, 255, 40, 40) }
+    private val oldBlock = Paint().apply { color = Color.argb(80, 160, 160, 160) }
+
+    private fun toView(fx: Float, fy: Float) = (dst.left + fx * dst.width()) to (dst.top + fy * dst.height())
+    private fun rectToView(r: RectF): RectF {
+        val (l, t) = toView(r.left, r.top)
+        val (rr, b) = toView(r.right, r.bottom)
+        return RectF(l, t, rr, b)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -205,17 +259,46 @@ class MapView(ctx: Context, private val bitmap: Bitmap) : View(ctx) {
         dst.set((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
         canvas.drawColor(Color.BLACK)
         canvas.drawBitmap(bitmap, null, dst, null)
+        oldRects.forEach { canvas.drawRect(rectToView(it), oldBlock) }
+        for ((fx, fy, label) in oldMarks) {
+            val (x, y) = toView(fx, fy)
+            canvas.drawCircle(x, y, 16f, oldRing)
+            canvas.drawText(label, x + 20f, y + 28f, oldText)
+        }
+        rects.forEach { canvas.drawRect(rectToView(it), block) }
+        val s = dragStart
+        val n = dragNow
+        if (s != null && n != null) canvas.drawRect(minOf(s.first, n.first), minOf(s.second, n.second), maxOf(s.first, n.first), maxOf(s.second, n.second), block)
         for ((fx, fy, label) in marks) {
-            val x = dst.left + fx * dst.width()
-            val y = dst.top + fy * dst.height()
+            val (x, y) = toView(fx, fy)
             canvas.drawCircle(x, y, 20f, ring)
             canvas.drawText(label, x + 24f, y - 10f, text)
         }
-        if (existingCount > 0) canvas.drawText("이미 등록된 작업대 $existingCount 곳", dst.left + 12f, dst.top + 36f, text)
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        val x = e.x.coerceIn(dst.left, dst.right)
+        val y = e.y.coerceIn(dst.top, dst.bottom)
+        if (dragMode()) {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { dragStart = x to y; dragNow = x to y }
+                MotionEvent.ACTION_MOVE -> dragNow = x to y
+                MotionEvent.ACTION_UP -> {
+                    val s = dragStart
+                    if (s != null) {
+                        val l = (minOf(s.first, x) - dst.left) / dst.width()
+                        val t = (minOf(s.second, y) - dst.top) / dst.height()
+                        val r = (maxOf(s.first, x) - dst.left) / dst.width()
+                        val b = (maxOf(s.second, y) - dst.top) / dst.height()
+                        onRect?.invoke(RectF(l, t, r, b))
+                    }
+                    dragStart = null; dragNow = null
+                }
+            }
+            invalidate()
+            return true
+        }
         if (e.action == MotionEvent.ACTION_UP && dst.contains(e.x, e.y)) {
             onTap?.invoke((e.x - dst.left) / dst.width(), (e.y - dst.top) / dst.height())
         }

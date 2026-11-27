@@ -19,8 +19,10 @@ class RouteOverlayView(ctx: Context) : View(ctx) {
 
     data class Point(val x: Float, val y: Float, val label: String)
 
-    private var from: Point? = null
-    private var targets: List<Point> = emptyList()
+    /** 한 구간: 꺾인 점들(화면 픽셀)과 도착 지점 이름. */
+    data class Leg(val points: List<Pair<Float, Float>>, val label: String)
+
+    private var legs: List<Leg> = emptyList()
     private val loc = IntArray(2)
 
     private val d = ctx.resources.displayMetrics.density
@@ -29,6 +31,7 @@ class RouteOverlayView(ctx: Context) : View(ctx) {
         strokeWidth = 4f * d
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
     }
     private val next = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(170, 255, 255, 255)
@@ -50,38 +53,40 @@ class RouteOverlayView(ctx: Context) : View(ctx) {
         setShadowLayer(3f * d, 0f, 0f, Color.BLACK)
     }
 
-    /** 좌표는 화면 픽셀. 메인 스레드에서 호출. */
-    fun show(from: Point?, targets: List<Point>) {
-        this.from = from
-        this.targets = targets
+    /** 좌표는 화면 픽셀. 첫 구간은 캐릭터에서 시작한다. 메인 스레드에서 호출. */
+    fun show(legs: List<Leg>) {
+        this.legs = legs
         invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
-        val start = from ?: return
-        if (targets.isEmpty()) return
+        if (legs.isEmpty()) return
         // 오버레이 창이 화면 원점과 어긋난 만큼(노치·상태바) 보정
         getLocationOnScreen(loc)
         canvas.translate(-loc[0].toFloat(), -loc[1].toFloat())
 
-        if (targets.size > 1) {
-            val p = Path().apply {
-                moveTo(targets[0].x, targets[0].y)
-                targets.drop(1).forEach { lineTo(it.x, it.y) }
-            }
-            canvas.drawPath(p, next)
+        legs.drop(1).forEach { canvas.drawPath(pathOf(it.points), next) }
+        val first = legs[0].points
+        canvas.drawPath(pathOf(first), main)
+        if (first.size >= 2) {
+            val a = first[first.size - 2]
+            val b = first.last()
+            arrowHead(canvas, Point(a.first, a.second, ""), Point(b.first, b.second, ""))
         }
-        val t0 = targets[0]
-        canvas.drawLine(start.x, start.y, t0.x, t0.y, main)
-        arrowHead(canvas, start, t0)
 
-        targets.forEachIndexed { i, t ->
+        legs.forEachIndexed { i, leg ->
+            val t = leg.points.lastOrNull() ?: return@forEachIndexed
             val r = (if (i == 0) 13f else 10f) * d
             dot.color = if (i == 0) Color.rgb(255, 214, 0) else Color.argb(220, 255, 255, 255)
-            canvas.drawCircle(t.x, t.y, r, dot)
-            canvas.drawText("${i + 1}", t.x, t.y + 4f * d, num)
-            if (i == 0) canvas.drawText(t.label, t.x + r + 4f * d, t.y - r, label)
+            canvas.drawCircle(t.first, t.second, r, dot)
+            canvas.drawText("${i + 1}", t.first, t.second + 4f * d, num)
+            if (i == 0) canvas.drawText(leg.label, t.first + r + 4f * d, t.second - r, label)
         }
+    }
+
+    private fun pathOf(pts: List<Pair<Float, Float>>) = Path().apply {
+        pts.firstOrNull()?.let { moveTo(it.first, it.second) }
+        pts.drop(1).forEach { lineTo(it.first, it.second) }
     }
 
     private fun arrowHead(c: Canvas, a: Point, b: Point) {

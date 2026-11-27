@@ -31,14 +31,28 @@ data class RouteStep(val station: Station?, val action: String, val missing: Sta
  */
 object RoutePlanner {
 
-    fun plan(order: Order, stations: List<Station>, startX: Float, startY: Float): List<RouteStep> {
+    /**
+     * @param dist 현재 위치에서 작업대까지 실제 걷는 거리. 없으면 직선거리.
+     *             길이 없는 작업대(INF)는 다른 후보가 있으면 고르지 않는다.
+     */
+    fun plan(
+        order: Order,
+        stations: List<Station>,
+        startX: Float,
+        startY: Float,
+        dist: ((Float, Float, Station) -> Float)? = null,
+    ): List<RouteStep> {
         var cx = startX
         var cy = startY
         val raw = ArrayList<RouteStep>()
 
         fun nearest(type: StationType, flower: String? = null, exclude: Station? = null): Station? =
             stations.filter { it.type == type && (flower == null || it.flower == flower) && it != exclude }
-                .minByOrNull { hypot(it.x - cx, it.y - cy) }
+                .minByOrNull {
+                    val straight = hypot(it.x - cx, it.y - cy)
+                    val d = dist?.invoke(cx, cy, it) ?: straight
+                    if (d == NavGrid.INF) 1e9f + straight else d
+                }
 
         fun go(st: Station?, action: String, type: StationType) {
             raw += RouteStep(st, action, if (st == null) type else null)

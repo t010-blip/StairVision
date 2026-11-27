@@ -86,6 +86,7 @@ class GuideService : Service() {
 
     // 경로 (메인 스레드)
     @Volatile private var stations: List<Station> = emptyList()
+    private var nav: NavModel? = null
     private var route: List<RouteStep> = emptyList()
     private var routeOrderId = -1
     private var step = 0
@@ -219,6 +220,7 @@ class GuideService : Service() {
     private fun reloadMap() {
         val m = store.load()
         stations = m.stations
+        nav = NavGrid.build(m.stations, m.obstacles)?.let { NavModel(it, m.stations) }
         tracker.landmarks = m.landmarks
         tracker.charFx = m.charFx
         tracker.charFy = m.charFy
@@ -232,25 +234,26 @@ class GuideService : Service() {
         val st = stations
         if (st.isEmpty()) {
             routeText.text = "경로: 지도 없음 · 게임 화면에서 '지도학습' → 앱의 '지도 등록'"
-            rv.show(null, emptyList())
+            rv.show(emptyList())
             return
         }
         val order = orders.firstOrNull()
         if (order == null) {
             routeText.text = "경로: 주문을 추가하면 동선을 그립니다 · 위치 보정 ${matched}곳"
-            rv.show(null, emptyList())
+            rv.show(emptyList())
             return
         }
         val charCellX = tracker.charFx * gridW
         val charCellY = tracker.charFy * gridH
         if (order.id != routeOrderId) {
-            route = RoutePlanner.plan(order, st, charCellX + camX, charCellY + camY)
+            val n = nav
+            route = RoutePlanner.plan(order, st, charCellX + camX, charCellY + camY, n?.let { m -> { x, y, s -> m.distance(x, y, s) } })
             routeOrderId = order.id
             step = 0
         }
         if (step >= route.size) {
             routeText.text = "경로 완료 · 주문을 눌러 지우면 다음 주문 동선을 그립니다"
-            rv.show(null, emptyList())
+            rv.show(emptyList())
             return
         }
 
@@ -275,12 +278,23 @@ class GuideService : Service() {
             }
         }
 
+        // 지도 좌표 → 화면 픽셀
         val scale = screenW.toFloat() / frameW * MapStore.CELL
-        val from = RouteOverlayView.Point(tracker.charFx * screenW, tracker.charFy * screenH, "")
-        val pts = route.drop(step).take(4).mapNotNull { s ->
-            s.station?.let { RouteOverlayView.Point((it.x - camX) * scale, (it.y - camY) * scale, "${it.name}: ${s.action}") }
+        fun scr(p: Pair<Float, Float>) = (p.first - camX) * scale to (p.second - camY) * scale
+        val n = nav
+        val legs = ArrayList<RouteOverlayView.Leg>()
+        var fx = charCellX + camX
+        var fy = charCellY + camY
+        for (s in route.drop(step).take(4)) {
+            val stn = s.station ?: continue
+            val pts = n?.path(fx, fy, stn) ?: listOf(fx to fy, stn.x to stn.y)
+            legs += RouteOverlayView.Leg(pts.map { scr(it) }, "${stn.name}: ${s.action}")
+            // 다음 구간은 이 작업대 앞(경로의 마지막 빈칸)에서 출발
+            val stand = if (pts.size >= 2) pts[pts.size - 2] else stn.x to stn.y
+            fx = stand.first
+            fy = stand.second
         }
-        rv.show(from, pts)
+        rv.show(legs)
     }
 
     // ---------- 화면 구성 ----------

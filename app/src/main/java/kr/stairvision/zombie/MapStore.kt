@@ -16,6 +16,7 @@ class MapStore(context: Context) {
     data class MapData(
         val stations: List<Station>,
         val landmarks: List<Landmark>,
+        val obstacles: List<Area>,
         val charFx: Float,
         val charFy: Float,
     )
@@ -23,7 +24,7 @@ class MapStore(context: Context) {
     data class CaptureMeta(val camX: Float, val camY: Float, val cell: Int)
 
     fun load(): MapData {
-        if (!mapFile.exists()) return MapData(emptyList(), emptyList(), 0.5f, 0.52f)
+        if (!mapFile.exists()) return MapData(emptyList(), emptyList(), emptyList(), 0.5f, 0.52f)
         val o = JSONObject(mapFile.readText())
         val st = ArrayList<Station>()
         val lm = ArrayList<Landmark>()
@@ -43,10 +44,17 @@ class MapStore(context: Context) {
                 lm += Landmark(station.id, station.x, station.y, GrayImage(size, size, px))
             }
         }
-        return MapData(st, lm, o.optDouble("charFx", 0.5).toFloat(), o.optDouble("charFy", 0.52).toFloat())
+        val obs = ArrayList<Area>()
+        o.optJSONArray("obstacles")?.let { a ->
+            for (i in 0 until a.length()) {
+                val r = a.getJSONArray(i)
+                obs += Area(r.getDouble(0).toFloat(), r.getDouble(1).toFloat(), r.getDouble(2).toFloat(), r.getDouble(3).toFloat())
+            }
+        }
+        return MapData(st, lm, obs, o.optDouble("charFx", 0.5).toFloat(), o.optDouble("charFy", 0.52).toFloat())
     }
 
-    fun save(stations: List<Station>, patches: Map<Int, GrayImage>, charFx: Float, charFy: Float) {
+    fun save(stations: List<Station>, patches: Map<Int, GrayImage>, obstacles: List<Area>, charFx: Float, charFy: Float) {
         val arr = JSONArray()
         for (s in stations) {
             val j = JSONObject()
@@ -61,6 +69,11 @@ class MapStore(context: Context) {
         }
         mapFile.writeText(
             JSONObject().put("stations", arr)
+                .put("obstacles", JSONArray().apply {
+                    obstacles.forEach { a ->
+                        put(JSONArray().put(a.x0.toDouble()).put(a.y0.toDouble()).put(a.x1.toDouble()).put(a.y1.toDouble()))
+                    }
+                })
                 .put("charFx", charFx.toDouble()).put("charFy", charFy.toDouble()).toString(),
         )
         bumpVersion()
