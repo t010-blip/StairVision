@@ -86,7 +86,7 @@ class MapCalibrationActivity : Activity() {
                 isAllCaps = false
                 setOnClickListener {
                     tool = t
-                    if (t is Tool.Seed) pickFlower() else refresh()
+                    refresh()
                 }
             })
         }
@@ -118,19 +118,18 @@ class MapCalibrationActivity : Activity() {
         }
     }
 
-    private fun pickFlower() {
+    /** 씨앗 상자를 누를 때마다 어떤 꽃인지 고른다. 상자 위 그림과 같은 꽃을 고르면 된다. */
+    private fun askFlower(onPicked: (String) -> Unit) {
         AlertDialog.Builder(this)
-            .setTitle("이 씨앗 상자의 꽃")
-            .setItems(Recipes.flowers.toTypedArray()) { _, i ->
-                seedFlower = Recipes.flowers[i]
-                refresh()
-            }
+            .setTitle("방금 누른 씨앗 상자의 꽃")
+            .setItems(Recipes.flowers.toTypedArray()) { _, i -> onPicked(Recipes.flowers[i]) }
+            .setNegativeButton("취소", null)
             .show()
     }
 
     private fun refresh() {
         val current = when (val t = tool) {
-            is Tool.Seed -> "씨앗 상자($seedFlower)"
+            is Tool.Seed -> "씨앗 상자 (누르면 꽃 선택)"
             else -> t.label
         }
         val hint = if (tool is Tool.Obstacle) {
@@ -152,7 +151,14 @@ class MapCalibrationActivity : Activity() {
                 charMark = fx to fy
                 history += "char"
             }
-            is Tool.Seed -> Mark(StationType.SEED, seedFlower, fx, fy).also { marks += it; history += it }
+            is Tool.Seed -> {
+                askFlower { flower ->
+                    seedFlower = flower
+                    Mark(StationType.SEED, flower, fx, fy).also { marks += it; history += it }
+                    refresh()
+                }
+                return
+            }
             is Tool.Other -> Mark(t.type, null, fx, fy).also { marks += it; history += it }
             is Tool.Obstacle -> return
         }

@@ -83,6 +83,8 @@ class GuideService : Service() {
     private var frameW = 0
     private var gridW = 0
     private var gridH = 0
+    private var bounds: IntArray? = null
+    private var frameCount = 0
 
     // 경로 (메인 스레드)
     @Volatile private var stations: List<Station> = emptyList()
@@ -170,8 +172,9 @@ class GuideService : Service() {
         screenH = minOf(realW, realH)
         frameW = (screenW / 2) and 1.inv()
         val frameH = (screenH / 2) and 1.inv()
-        gridW = frameW / MapStore.CELL
-        gridH = frameH / MapStore.CELL
+        // 지도 칸은 '휴대폰 화면 8px'로 고정한다. 캡처 크기·여백과 무관하게 같은 지도를 쓴다.
+        gridW = screenW / (2 * MapStore.CELL)
+        gridH = screenH / (2 * MapStore.CELL)
 
         val worker = HandlerThread("guide-track").also { it.start() }
         thread = worker
@@ -194,8 +197,11 @@ class GuideService : Service() {
         try {
             val plane = image.planes[0]
             val src = RgbaBufferSource(plane.buffer, image.width, image.height, plane.rowStride, plane.pixelStride)
-            if (saveCapture.compareAndSet(true, false)) saveCaptureFrame(src)
-            tracker.update(GrayImage.from(src, MapStore.CELL))
+            // 검은 여백 확인은 1초에 두 번 정도면 충분하다
+            if (bounds == null || frameCount++ % 30 == 0) bounds = GrayImage.contentBounds(src)
+            val bd = bounds!!
+            if (saveCapture.compareAndSet(true, false)) saveCaptureFrame(src, bd)
+            tracker.update(GrayImage.fromRegion(src, bd[0], bd[1], bd[2], bd[3], gridW, gridH))
             val cx = tracker.camX
             val cy = tracker.camY
             val matched = tracker.matched
@@ -205,10 +211,19 @@ class GuideService : Service() {
         }
     }
 
-    private fun saveCaptureFrame(src: RgbaBufferSource) {
-        val px = IntArray(src.width * src.height)
-        for (y in 0 until src.height) for (x in 0 until src.width) px[y * src.width + x] = src.rgb(x, y) or (0xFF shl 24)
-        val bmp = Bitmap.createBitmap(px, src.width, src.height, Bitmap.Config.ARGB_8888)
+    /** 게임 영역만 잘라 휴대폰 화면 비율(화면의 절반 크기)로 맞춰 저장한다. */
+    private fun saveCaptureFrame(src: RgbaBufferSource, bd: IntArray) {
+        val outW = gridW * MapStore.CELL
+        val outH = gridH * MapStore.CELL
+        val px = IntArray(outW * outH)
+        for (y in 0 until outH) {
+            val sy = (bd[1] + ((y + 0.5f) * bd[3] / outH).toInt()).coerceIn(0, src.height - 1)
+            for (x in 0 until outW) {
+                val sx = (bd[0] + ((x + 0.5f) * bd[2] / outW).toInt()).coerceIn(0, src.width - 1)
+                px[y * outW + x] = src.rgb(sx, sy) or (0xFF shl 24)
+            }
+        }
+        val bmp = Bitmap.createBitmap(px, outW, outH, Bitmap.Config.ARGB_8888)
         FileOutputStream(store.captureImage).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         store.saveCaptureMeta(MapStore.CaptureMeta(tracker.camX, tracker.camY, MapStore.CELL))
         main.post {
@@ -279,7 +294,7 @@ class GuideService : Service() {
         }
 
         // 지도 좌표 → 화면 픽셀
-        val scale = screenW.toFloat() / frameW * MapStore.CELL
+        val scale = screenW.toFloat() / gridW
         fun scr(p: Pair<Float, Float>) = (p.first - camX) * scale to (p.second - camY) * scale
         val n = nav
         val legs = ArrayList<RouteOverlayView.Leg>()
