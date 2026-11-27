@@ -23,6 +23,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import kr.stairvision.analysis.Side
+import kr.stairvision.zombie.GuideService
 
 class MainActivity : Activity() {
 
@@ -85,7 +86,23 @@ class MainActivity : Activity() {
             status.postDelayed({ refreshStatus() }, 300)
         })
 
-        col.addView(header("설정"))
+        col.addView(header("좀비고 크리스마스 익스프레스 2 가이드"))
+        col.addView(TextView(this).apply {
+            text = "게임 위에 주문별 제작 순서와 필요한 꽃 합계를 띄웁니다. 화면 상단 주문을 '+주문'으로 고르고, 끝난 주문은 눌러서 지웁니다. 화면 캡처·자동 입력은 쓰지 않습니다."
+            textSize = 13f
+        })
+        col.addView(button("크익2 가이드 열기") {
+            if (!Settings.canDrawOverlays(this)) {
+                toast("먼저 ① 다른 앱 위에 표시 권한을 켜세요")
+            } else if (GuideService.isRunning) {
+                toast("이미 열려 있습니다")
+            } else {
+                GuideService.start(this)
+                toast("좀비고를 열면 오른쪽 위에 가이드가 보입니다")
+            }
+        })
+
+        col.addView(header("계단 설정"))
         col.addView(TextView(this).apply { text = "게임 시작 시 캐릭터 방향" })
         facingGroup = RadioGroup(this).apply {
             orientation = RadioGroup.HORIZONTAL
