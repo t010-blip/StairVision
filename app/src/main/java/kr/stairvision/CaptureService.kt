@@ -203,9 +203,11 @@ class CaptureService : Service(), OverlayController.Listener {
                 OverlayState(
                     headline = "${arrow(action)} ${action.label()}",
                     detail = String.format(
-                        Locale.US, "다음:%s 방향:%s 신뢰도 %.2f\nL %.2f  R %.2f  현재 %.2f",
-                        a.nextSide?.label() ?: "?", gate.facing.label(), a.confidence,
-                        a.leftScore, a.rightScore, a.currentScore,
+                        Locale.US,
+                        "다음:%s 방향:%s%s 신뢰도 %.2f\n위 L %.2f R %.2f · 아래 L %.2f R %.2f · %d색",
+                        a.nextSide?.label() ?: "?", gate.facingFor(a).label(),
+                        if (a.inferredFacing != null) "" else "(추적)", a.confidence,
+                        a.leftScore, a.rightScore, a.belowLeftScore, a.belowRightScore, a.paletteSize,
                     ),
                     status = String.format(
                         Locale.US, "%s · 입력 %d회 · %.1fms%s",

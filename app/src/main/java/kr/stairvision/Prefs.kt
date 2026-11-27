@@ -43,7 +43,7 @@ class Prefs(context: Context) {
         set(v) = sp.edit().putInt("required_frames", v).apply()
 
     var matchThreshold: Float
-        get() = sp.getFloat("match_threshold", 0.6f)
+        get() = sp.getFloat("match_threshold", 0.5f)
         set(v) = sp.edit().putFloat("match_threshold", v).apply()
 
     var colorTolerance: Int

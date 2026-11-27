@@ -7,8 +7,8 @@ data class GateConfig(
     val settleMs: Long = 90,
     /** 이 신뢰도 미만이면 입력하지 않는다. */
     val minConfidence: Float = 0.4f,
-    /** 현재 발판이 이 시간 넘게 안 보이면 자동 입력을 끈다. */
-    val lostTimeoutMs: Long = 800,
+    /** 확실한 판단이 이 시간 넘게 없으면 자동 입력을 끈다(게임 오버·화면 전환). */
+    val stallTimeoutMs: Long = 1200,
 )
 
 sealed class GateResult {
@@ -23,37 +23,42 @@ sealed class GateResult {
 /**
  * 분석 결과를 실제 입력으로 넘길지 정하는 안전 장치.
  *
- * 핵심 위험: 입력 직후에도 입력 전에 찍힌 프레임이 도착할 수 있다.
- * 예) 회전 입력 뒤 옛 프레임을 보면 '이미 그쪽을 보고 있다'고 판단해 한 칸 더 오른다.
- * 그래서 입력 시각 + settleMs 이전 프레임은 버리고, 같은 판단이 여러 프레임 이어질 때만 입력한다.
+ * - 현재 방향은 화면의 이전 발판 위치로 정하고, 보이지 않을 때만(게임 시작 직후) 입력 이력으로 추적한 값을 쓴다.
+ * - 입력 직후 도착하는 옛 프레임(입력 시각 + settleMs 이전)은 버린다.
+ * - 같은 판단이 여러 프레임 이어질 때만 입력한다.
  */
 class DecisionGate(
     @Volatile var config: GateConfig = GateConfig(),
     initialFacing: Side = Side.LEFT,
 ) {
+    /** 마지막으로 확정된 캐릭터 방향. */
     @Volatile var facing: Side = initialFacing
 
     private var lastInputNs: Long? = null
     private var streakAction = Action.UNKNOWN
     private var streak = 0
-    private var lastSeenNs: Long? = null
+    private var lastConfidentNs: Long? = null
 
     fun reset(newFacing: Side) {
         facing = newFacing
         lastInputNs = null
         streakAction = Action.UNKNOWN
         streak = 0
-        lastSeenNs = null
+        lastConfidentNs = null
     }
 
+    /** 이 프레임에서 쓸 방향: 화면에서 읽은 값 우선, 없으면 추적값. */
+    fun facingFor(a: Analysis): Side = a.inferredFacing ?: facing
+
     /** 오버레이 표시용 판단(입력 여부와 무관). */
-    fun displayAction(a: Analysis): Action = decide(a.nextSide, facing)
+    fun displayAction(a: Analysis): Action = decide(a.nextSide, facingFor(a))
 
     fun onFrame(frameNs: Long, nowNs: Long, a: Analysis, autoEnabled: Boolean): GateResult {
         if (!autoEnabled) {
+            a.inferredFacing?.let { facing = it }
             streak = 0
             streakAction = Action.UNKNOWN
-            lastSeenNs = null
+            lastConfidentNs = null
             return GateResult.Idle
         }
 
@@ -64,21 +69,19 @@ class DecisionGate(
             return GateResult.Wait
         }
 
-        if (a.currentFound) {
-            lastSeenNs = frameNs
-        } else {
-            val seen = lastSeenNs ?: frameNs.also { lastSeenNs = it }
-            if (frameNs - seen > config.lostTimeoutMs * MS) {
-                return GateResult.Halt("현재 발판을 찾지 못함 (게임 오버 또는 화면 전환)")
-            }
-        }
-
-        val action = decide(a.nextSide, facing)
+        val f = facingFor(a)
+        facing = f
+        val action = decide(a.nextSide, f)
         if (action == Action.UNKNOWN || a.confidence < config.minConfidence) {
             streak = 0
             streakAction = Action.UNKNOWN
+            val since = lastConfidentNs ?: frameNs.also { lastConfidentNs = it }
+            if (frameNs - since > config.stallTimeoutMs * MS) {
+                return GateResult.Halt("판단 불가 상태가 계속됨 (게임 오버·화면 전환·인식 실패)")
+            }
             return GateResult.Wait
         }
+        lastConfidentNs = frameNs
 
         if (action == streakAction) streak++ else {
             streakAction = action

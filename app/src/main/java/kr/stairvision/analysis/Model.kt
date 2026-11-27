@@ -41,13 +41,21 @@ data class Analysis(
     val currentScore: Float,
     val leftScore: Float,
     val rightScore: Float,
-    /** 현재 발판이 보이는가. 아니면 게임 오버·화면 전환으로 본다. */
+    /** 현재 발판 영역이 자기 색 구성과 일치하는가(표시용). */
     val currentFound: Boolean,
     /** 다음 발판이 한쪽에만 확실히 있을 때만 값이 있다. */
     val nextSide: Side?,
-    /** 0..1. 판단이 없으면 0. */
+    /** 0..1. 위 줄 두 후보의 점수 차이. 판단이 없으면 0. */
     val confidence: Float,
-)
+    /** 이전(아래 줄) 발판이 놓인 쪽. 게임 시작 직후처럼 없으면 null. */
+    val prevSide: Side? = null,
+    val belowLeftScore: Float = 0f,
+    val belowRightScore: Float = 0f,
+    val paletteSize: Int = 1,
+) {
+    /** 캐릭터는 이전 발판에서 바라보는 방향으로 올라왔으므로 이전 발판의 반대쪽을 본다. */
+    val inferredFacing: Side? get() = prevSide?.flip()
+}
 
 /** 계획서의 행동 판단표. 반대쪽 발판이 실제로 확인돼야 회전한다. */
 fun decide(nextSide: Side?, facing: Side): Action = when (nextSide) {
@@ -63,3 +71,6 @@ fun Action.label(): String = when (this) {
     Action.TURN_RIGHT -> "TURN_RIGHT 우회전"
     Action.UNKNOWN -> "UNKNOWN 보류"
 }
+
+/** 방향 전환 버튼은 좌·우 구분 없이 하나다. */
+fun Action.usesTurnButton(): Boolean = this == Action.TURN_LEFT || this == Action.TURN_RIGHT

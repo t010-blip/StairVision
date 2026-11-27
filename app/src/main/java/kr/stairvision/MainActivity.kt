@@ -176,7 +176,7 @@ class MainActivity : Activity() {
         prefs.initialFacing = if (facingGroup.checkedRadioButtonId == ID_RIGHT) Side.RIGHT else Side.LEFT
         prefs.settleMs = long("settle", 90).coerceIn(0, 1000)
         prefs.requiredFrames = long("frames", 2).toInt().coerceIn(1, 10)
-        prefs.matchThreshold = float("threshold", 0.6f).coerceIn(0.1f, 1f)
+        prefs.matchThreshold = float("threshold", 0.5f).coerceIn(0.1f, 1f)
         prefs.colorTolerance = long("tolerance", 40).toInt().coerceIn(0, 255)
         prefs.minConfidence = float("confidence", 0.4f).coerceIn(0f, 1f)
         toast("저장했습니다. 분석 중이면 바로 적용됩니다")

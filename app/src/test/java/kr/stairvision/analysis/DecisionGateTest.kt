@@ -7,10 +7,10 @@ import org.junit.Test
 class DecisionGateTest {
     private val ms = 1_000_000L
 
-    private fun seen(side: Side?, conf: Float = 0.9f) =
-        Analysis(0.95f, 0f, 0f, currentFound = true, nextSide = side, confidence = if (side == null) 0f else conf)
-
-    private val lost = Analysis(0f, 0f, 0f, currentFound = false, nextSide = null, confidence = 0f)
+    private fun seen(side: Side?, conf: Float = 0.9f, prev: Side? = null) = Analysis(
+        0.95f, 0f, 0f, currentFound = true, nextSide = side,
+        confidence = if (side == null) 0f else conf, prevSide = prev,
+    )
 
     @Test fun idleWhenAutoOff() {
         val g = DecisionGate()
@@ -40,21 +40,29 @@ class DecisionGateTest {
         val g = DecisionGate(GateConfig(requiredFrames = 1, settleMs = 90), Side.LEFT)
         assertEquals(GateResult.Fire(Action.TURN_RIGHT), g.onFrame(0, 10 * ms, seen(Side.RIGHT), true))
         assertEquals(Side.RIGHT, g.facing)
-        // 입력 시각(10ms) 이후 90ms 안의 프레임: 옛 화면일 수 있으므로 무시
         assertEquals(GateResult.Wait, g.onFrame(50 * ms, 60 * ms, seen(Side.RIGHT), true))
-        // 충분히 지난 새 프레임은 정상 처리
         assertEquals(GateResult.Fire(Action.CLIMB), g.onFrame(120 * ms, 120 * ms, seen(Side.RIGHT), true))
     }
 
-    @Test fun haltsWhenCurrentStepLost() {
-        val g = DecisionGate(GateConfig(lostTimeoutMs = 800), Side.LEFT)
-        g.onFrame(0, 0, seen(Side.LEFT), true)
-        assertEquals(GateResult.Wait, g.onFrame(500 * ms, 500 * ms, lost, true))
-        assertTrue(g.onFrame(900 * ms, 900 * ms, lost, true) is GateResult.Halt)
+    /** 화면에서 읽은 방향이 잘못 추적된 방향을 바로잡는다. */
+    @Test fun visibleFacingOverridesTrackedFacing() {
+        val g = DecisionGate(GateConfig(requiredFrames = 1), Side.LEFT) // 추적값은 왼쪽(틀림)
+        // 이전 발판이 왼쪽 아래 → 실제로는 오른쪽을 봄. 다음 발판도 오른쪽 위 → 오르기
+        assertEquals(GateResult.Fire(Action.CLIMB), g.onFrame(0, 0, seen(Side.RIGHT, prev = Side.LEFT), true))
+        assertEquals(Side.RIGHT, g.facing)
     }
 
-    @Test fun unknownNeverFires() {
-        val g = DecisionGate(GateConfig(requiredFrames = 1), Side.LEFT)
-        repeat(10) { i -> assertEquals(GateResult.Wait, g.onFrame(i * 16 * ms, i * 16 * ms, seen(null), true)) }
+    @Test fun haltsWhenStalled() {
+        val g = DecisionGate(GateConfig(stallTimeoutMs = 1000), Side.LEFT)
+        assertEquals(GateResult.Wait, g.onFrame(0, 0, seen(null), true))
+        assertEquals(GateResult.Wait, g.onFrame(600 * ms, 600 * ms, seen(null), true))
+        assertTrue(g.onFrame(1100 * ms, 1100 * ms, seen(null), true) is GateResult.Halt)
+    }
+
+    @Test fun confidentFrameResetsStallTimer() {
+        val g = DecisionGate(GateConfig(stallTimeoutMs = 1000, requiredFrames = 5), Side.LEFT)
+        g.onFrame(0, 0, seen(null), true)
+        g.onFrame(900 * ms, 900 * ms, seen(Side.LEFT), true)
+        assertEquals(GateResult.Wait, g.onFrame(1500 * ms, 1500 * ms, seen(null), true))
     }
 }
