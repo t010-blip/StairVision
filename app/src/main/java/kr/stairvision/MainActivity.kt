@@ -88,18 +88,12 @@ class MainActivity : Activity() {
 
         col.addView(header("좀비고 크리스마스 익스프레스 2 가이드"))
         col.addView(TextView(this).apply {
-            text = "게임 위에 주문별 제작 순서와 필요한 꽃 합계를 띄웁니다. 화면 상단 주문을 '+주문'으로 고르고, 끝난 주문은 눌러서 지웁니다. 화면 캡처·자동 입력은 쓰지 않습니다."
+            text = "주문별 제작 순서와 꽃 합계를 보여주고, 지도를 등록하면 지금 갈 곳까지 선으로 그려 줍니다. 자동 입력은 하지 않습니다."
             textSize = 13f
         })
-        col.addView(button("크익2 가이드 열기") {
-            if (!Settings.canDrawOverlays(this)) {
-                toast("먼저 ① 다른 앱 위에 표시 권한을 켜세요")
-            } else if (GuideService.isRunning) {
-                toast("이미 열려 있습니다")
-            } else {
-                GuideService.start(this)
-                toast("좀비고를 열면 오른쪽 위에 가이드가 보입니다")
-            }
+        col.addView(button("크익2 가이드 열기 (화면 캡처)") { startGuide() })
+        col.addView(button("크익2 지도 등록") {
+            startActivity(Intent(this, kr.stairvision.zombie.MapCalibrationActivity::class.java))
         })
 
         col.addView(header("계단 설정"))
@@ -135,6 +129,27 @@ class MainActivity : Activity() {
         return ScrollView(this).apply { addView(col) }
     }
 
+    private fun startGuide() {
+        if (!Settings.canDrawOverlays(this)) {
+            toast("먼저 ① 다른 앱 위에 표시 권한을 켜세요")
+            return
+        }
+        if (GuideService.isRunning) {
+            toast("이미 열려 있습니다")
+            return
+        }
+        // 화면 캡처는 한 번에 하나만: 계단 분석이 켜져 있으면 끈다
+        if (CaptureService.isRunning) CaptureService.stop(this)
+        val mpm = getSystemService(MediaProjectionManager::class.java)
+        val intent = if (Build.VERSION.SDK_INT >= 34) {
+            mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+        } else {
+            mpm.createScreenCaptureIntent()
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQ_GUIDE)
+    }
+
     private fun startCapture() {
         if (!Settings.canDrawOverlays(this)) {
             toast("먼저 ① 다른 앱 위에 표시 권한을 켜세요")
@@ -144,6 +159,7 @@ class MainActivity : Activity() {
             toast("이미 분석 중입니다")
             return
         }
+        if (GuideService.isRunning) GuideService.stop(this)
         val mpm = getSystemService(MediaProjectionManager::class.java)
         // 앱 단위 공유가 아닌 전체 화면을 받아야 탭 좌표와 캡처 좌표가 일치한다.
         val intent = if (Build.VERSION.SDK_INT >= 34) {
@@ -159,6 +175,15 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_GUIDE) {
+            if (resultCode == RESULT_OK && data != null) {
+                GuideService.start(this, resultCode, data)
+                toast("좀비고를 열면 오른쪽 위에 가이드가 보입니다")
+            } else {
+                toast("화면 캡처가 허용되지 않았습니다")
+            }
+            return
+        }
         if (requestCode != REQ_CAPTURE) return
         if (resultCode == RESULT_OK && data != null) {
             CaptureService.start(this, resultCode, data)
@@ -238,6 +263,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_CAPTURE = 1
         private const val REQ_NOTIF = 2
+        private const val REQ_GUIDE = 3
         private const val ID_LEFT = 1001
         private const val ID_RIGHT = 1002
     }
